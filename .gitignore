@@ -1,0 +1,10 @@
+.env
+service-account.json
+*.db
+logs/
+__pycache__/
+*.pyc
+node_modules/
+playwright/
+data/raw.db
+data/structured.db
