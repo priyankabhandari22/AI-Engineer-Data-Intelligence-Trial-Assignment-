@@ -73,6 +73,8 @@ def remap_papers(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
     out["schemaVersion"] = df.get("schema_version", "1.0")
     out["recordType"] = "RESEARCH_PAPER"
+    out["source.name"] = df.get("source_name", "ArXiv")
+    out["source.url"] = df.get("source_url")
     out["content.title"] = df.get("title")
     out["content.authors"] = df.get("authors")
     out["content.paper_url"] = df.get("paper_url")
@@ -86,6 +88,8 @@ def remap_jobs(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
     out["schemaVersion"] = df.get("schema_version", "1.0")
     out["recordType"] = "JOB"
+    out["source.name"] = df.get("source_name")
+    out["source.url"] = df.get("source_url")
     out["content.company"] = df.get("company")
     out["content.role_title"] = df.get("role_title")
     out["content.role_family"] = df.get("role_family")

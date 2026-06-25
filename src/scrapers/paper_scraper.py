@@ -72,3 +72,38 @@ class PaperScraper(BaseScraper):
                 await asyncio.sleep(0.5)
 
         return papers
+
+    async def fetch_hf_daily_papers(self, limit: int = 100) -> list[dict]:
+        papers = []
+        async with aiohttp.ClientSession(headers={"Accept": "application/json"}) as session:
+            url = "https://huggingface.co/api/daily_papers"
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    logger.error(f"HF daily papers API returned {resp.status}")
+                    return []
+                data = await resp.json()
+            for item in data[:limit]:
+                paper_data = item.get("paper", item)
+                title = paper_data.get("title", "")
+                paper_url = f"https://arxiv.org/abs/{paper_data.get('id', '')}"
+                pwc_url = f"https://paperswithcode.com/paper/{paper_data.get('id', '')}"
+                authors = paper_data.get("authors") or paper_data.get("author_list", [])
+                if isinstance(authors, list) and all(isinstance(a, dict) for a in authors):
+                    authors = [a.get("name", "") for a in authors]
+                paper = {
+                    "schemaVersion": "1.0",
+                    "recordType": "RESEARCH_PAPER",
+                    "source": {"name": "PapersWithCode", "url": pwc_url},
+                    "content": {
+                        "title": title,
+                        "authors": authors,
+                        "paper_url": paper_url,
+                        "published_date": paper_data.get("published_at") or paper_data.get("pubdate"),
+                        "github_url": paper_data.get("url") or None,
+                        "github_stars": None,
+                    },
+                    "collectedAt": datetime.utcnow().isoformat() + "Z",
+                }
+                papers.append(paper)
+        logger.info(f"Fetched {len(papers)} papers from HuggingFace daily papers API")
+        return papers

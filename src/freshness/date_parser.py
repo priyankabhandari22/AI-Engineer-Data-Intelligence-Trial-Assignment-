@@ -46,7 +46,7 @@ def parse_date(date_str: str | None) -> datetime | None:
     return None
 
 
-def is_within_24_hours(dt: datetime | None) -> bool:
+def is_within_hours(dt: datetime | None, hours: int = 72) -> bool:
     if not dt:
         return False
 
@@ -55,7 +55,7 @@ def is_within_24_hours(dt: datetime | None) -> bool:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
 
-    return (now - dt).total_seconds() < 86400
+    return (now - dt).total_seconds() < hours * 3600
 
 
 def extract_date_from_html(soup) -> datetime | None:

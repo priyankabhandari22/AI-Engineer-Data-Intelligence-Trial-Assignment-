@@ -10,7 +10,7 @@ from loguru import logger
 from src.scrapers.news_scraper import NewsScraper
 from src.scrapers.job_scraper import JobScraper
 from src.storage.database import init_structured_db, get_connection, insert_news, insert_job
-from src.freshness.date_parser import parse_date, is_within_24_hours
+from src.freshness.date_parser import parse_date, is_within_hours
 import config.settings as settings
 
 
@@ -34,27 +34,32 @@ async def main():
     fresh_news = []
     for item in news_items:
         pub_date = parse_date(item["content"].get("published_date"))
-        is_fresh = is_within_24_hours(pub_date)
+        is_fresh = is_within_hours(pub_date, hours=72)
         if is_fresh or args.include_all:
             fresh_news.append(item)
             insert_news(conn, item)
 
     logger.info(f"News: {len(news_items)} total, {len(fresh_news)} saved")
 
-    # Jobs
-    logger.info("--- Fetching RemoteOK jobs ---")
+    # Jobs from all boards
+    logger.info("--- Fetching jobs from all boards ---")
     job_scraper = JobScraper(concurrency=5)
-    jobs = await job_scraper.fetch_remoteok_jobs()
+
+    all_jobs = []
+    all_jobs.extend(await job_scraper.fetch_remoteok_jobs())
+    all_jobs.extend(await job_scraper.fetch_all_greenhouse_jobs())
+    all_jobs.extend(await job_scraper.fetch_all_lever_jobs())
+    all_jobs.extend(await job_scraper.fetch_more_greenhouse_boards())
 
     fresh_jobs = []
-    for job in jobs:
+    for job in all_jobs:
         pub_date = parse_date(job["content"].get("date"))
-        is_fresh = is_within_24_hours(pub_date)
+        is_fresh = is_within_hours(pub_date, hours=72)
         if is_fresh or args.include_all:
             fresh_jobs.append(job)
             insert_job(conn, job)
 
-    logger.info(f"Jobs: {len(jobs)} total, {len(fresh_jobs)} saved")
+    logger.info(f"Jobs: {len(all_jobs)} total, {len(fresh_jobs)} saved")
 
     conn.close()
     logger.info("=== MONITOR RUN COMPLETE ===")
