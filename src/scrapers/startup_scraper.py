@@ -33,6 +33,7 @@ class StartupScraper(BaseScraper):
                         "location": item.get("location"),
                         "website": item.get("website"),
                         "fundingTotal": None,
+                        "batch": item.get("batch"),
                     }
                 },
                 "collectedAt": datetime.utcnow().isoformat() + "Z"

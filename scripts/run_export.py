@@ -49,6 +49,7 @@ def remap_startups(df: pd.DataFrame) -> pd.DataFrame:
     out["content.data.location"] = df.get("location")
     out["content.data.website"] = df.get("website")
     out["content.data.fundingTotal"] = df.get("funding_total")
+    out["content.data.batch"] = df.get("batch")
     out["collectedAt"] = df.get("collected_at")
     return out
 

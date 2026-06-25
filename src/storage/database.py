@@ -41,6 +41,7 @@ def init_structured_db(db_path: str = "data/structured.db"):
             location TEXT,
             website TEXT,
             funding_total TEXT,
+            batch TEXT,
             collected_at TEXT NOT NULL,
             schema_version TEXT DEFAULT '1.0'
         )
@@ -147,8 +148,8 @@ def insert_startup(conn, record: dict):
     d = c["data"]
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT OR IGNORE INTO startups (source_url, source_name, record_type, entity_name, description, founded_year, employee_count, location, website, funding_total, collected_at, schema_version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR IGNORE INTO startups (source_url, source_name, record_type, entity_name, description, founded_year, employee_count, location, website, funding_total, batch, collected_at, schema_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         record.get("source", {}).get("url"),
         record.get("source", {}).get("name", "Y Combinator"),
@@ -160,6 +161,7 @@ def insert_startup(conn, record: dict):
         d.get("location"),
         d.get("website"),
         d.get("fundingTotal"),
+        d.get("batch"),
         record.get("collectedAt"),
         record.get("schemaVersion", "1.0"),
     ))
