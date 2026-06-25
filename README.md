@@ -1,164 +1,360 @@
-# GraphOne Atlas Intelligence
+# GraphOne Intelligence Pipeline
 
-End-to-end data intelligence pipeline: multi-source ingestion → structured storage → LLM extraction → entity resolution → export.
-
-**Sources:** Y Combinator (5,971), Product Hunt (1,044), ArXiv (1,000), PapersWithCode/HuggingFace (50), RemoteOK, Greenhouse, Lever (3,852 jobs), RSS news (37) — **8,101+ records**, zero hallucinated.
+End-to-end data intelligence system: multi-source ingestion → structured storage → LLM extraction → entity resolution → CSV/Sheets export. **8,101+ records across 6 source types, zero hallucinated.**
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────┐    ┌──────────┐    ┌─────────────┐    ┌──────────────────┐    ┌──────────────┐
-│  Scrapers   │───▶│  Raw DB  │───▶│   Monitor   │───▶│  Structured DB   │───▶│    Export    │
-│  (async)    │    │ (SQLite) │    │ (24h/72h Δ) │    │   (SQLite)       │    │  CSV + Sheets│
-├─────────────┤    └──────────┘    ├─────────────┤    ├──────────────────┤    └──────────────┘
-│ • YC API    │                    │ • RSS News  │    │ • Entity Resolve │
-│ • ArXiv     │                    │ • Job Boards│    │   (RapidFuzz)    │
-│ • PH GraphQL│                    │ • LLM Tier  │    │ • LLM Extraction │
-│ • Job APIs  │                    │   (3-level  │    │   (Gemini/Groq/  │
-│ • Playwright│                    │    fallback)│    │    DeepSeek)     │
-└─────────────┘                    └─────────────┘    └──────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        INGESTION LAYER                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────┐ │
+│  │ YC API   │  │  ArXiv   │  │ProductHunt│  │Job Boards│  │ RSS  │ │
+│  │(REST)    │  │ (OAI-PMH)│  │ (GraphQL) │  │ (REST)   │  │ Atom │ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──┬───┘ │
+│       │ asyncio     │ asyncio     │ asyncio     │ asyncio    │      │
+└───────┼─────────────┼─────────────┼─────────────┼────────────┼──────┘
+        ▼             ▼             ▼             ▼            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      STORAGE LAYER                                  │
+│              ┌──────────────────────────────┐                       │
+│              │      structured.db (SQLite)   │                       │
+│              │  ┌──────────┐ ┌────────────┐ │                       │
+│              │  │  raw_*   │ │  startups  │ │                       │
+│              │  │  tables  │ │  products  │ │                       │
+│              │  │          │ │  papers    │ │                       │
+│              │  │          │ │  jobs      │ │                       │
+│              │  │          │ │  news      │ │                       │
+│              │  │          │ │  entity_log│ │                       │
+│              │  └──────────┘ └────────────┘ │                       │
+│              └──────────────────────────────┘                       │
+└─────────────────────────────────────────────────────────────────────┘
+                        │
+                        ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      PROCESSING LAYER                               │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────────┐  │
+│  │ LLM Extraction │──▶Entity Resolution│──▶  Export & Validate   │  │
+│  │ Gemini → Groq  │  │Compact→Norm→Fuzz│  │  URL regex check    │  │
+│  │ → DeepSeek     │  │(threshold 92)   │  │  → CSV + Sheets     │  │
+│  └────────────────┘  └────────────────┘  └──────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
-
-### Data Flow
-
-1. **Bulk scrape** → `scripts/run_bulk.py` — fetches all historical data
-2. **Monitor** → `scripts/run_monitor.py` — incremental updates with freshness window
-3. **Jobs** → `scripts/run_jobs.py` — multi-board job collection
-4. **Papers** → `scripts/run_pwc.py` — PapersWithCode papers via HuggingFace API
-5. **Export** → `scripts/run_export.py` — validates URLs, resolves entities, outputs CSV
 
 ---
 
-## Setup
+## Stack
+
+| Layer | Technology |
+|---|---|
+| **Language** | Python 3.13 |
+| **Async HTTP** | `aiohttp` + `asyncio` |
+| **Browser Automation** | Playwright Chromium (403 fallback) |
+| **LLM** | Gemini 2.5 Flash → Groq Llama 3.1 → DeepSeek V4 Flash |
+| **Entity Resolution** | RapidFuzz (`token_sort_ratio`, threshold 92) |
+| **Database** | SQLite (single-file, zero-infrastructure) |
+| **Export** | pandas CSV + gspread (Google Sheets) |
+| **Date Parsing** | `dateutil` + custom relative-date parser |
+
+---
+
+## Data Pipeline / Sources
+
+| Source | Type | Method | Records | Frequency |
+|---|---|---|---|---|
+| **Y Combinator** | Startups | `yc-oss.github.io` REST API | 5,971 | Bulk |
+| **Product Hunt** | Products | GraphQL API (paginated) | 1,044 | Bulk |
+| **ArXiv** | Research Papers | OAI-PMH API (batched) | 1,000 | Bulk |
+| **PapersWithCode / HuggingFace** | Research Papers | HF Daily Papers API | 50 | Daily |
+| **RemoteOK** | Jobs | Public JSON API | 101 | Monitor |
+| **Greenhouse** | Jobs | Boards API (25 companies) | 3,624 | Monitor |
+| **Lever** | Jobs | Postings API (multi-board) | 127 | Monitor |
+| **RSS News Feeds** | News | feedparser (4 sources) | 37 | Monitor |
+
+Every record traces to a valid `source_url` — zero hallucinated data.
+
+---
+
+## Prerequisites
+
+- Python 3.10+
+- [Playwright Chromium](https://playwright.dev/python/) (`playwright install chromium`)
+- API keys for LLM extraction (see Configuration)
+
+---
+
+## Configuration
 
 ```bash
-pip install -r requirements.txt
-playwright install chromium
+cp .env.example .env
 ```
 
-Copy `.env.example` → `.env` and populate:
-
-| Key | Required | Source |
+| Key | Required | Purpose |
 |---|---|---|
-| `GEMINI_API_KEY` | Yes | https://aistudio.google.com/apikey |
-| `GROQ_API_KEY` | Yes | https://console.groq.com/keys |
-| `DEEPSEEK_API_KEY` | Yes | https://platform.deepseek.com/api_keys |
-| `GITHUB_TOKEN` | No (enrichment) | https://github.com/settings/tokens |
-| `PRODUCT_HUNT_TOKEN` | No | https://api.producthunt.com/v2/oauth |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | No (auto-upload) | GCP service account key |
+| `GEMINI_API_KEY` | Yes | Primary LLM extraction tier |
+| `GROQ_API_KEY` | Yes | Secondary LLM fallback |
+| `DEEPSEEK_API_KEY` | Yes | Tertiary LLM fallback |
+| `GITHUB_TOKEN` | Optional | GitHub star enrichment |
+| `PRODUCT_HUNT_TOKEN` | Optional | Product Hunt API access |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Optional | Google Sheets auto-upload |
+
+LLM extraction degrades gracefully — missing keys skip that tier rather than failing.
 
 ---
 
-## Pipeline Phases
+## Google Sheets Setup
 
-### Phase I — Bulk Ingestion
+1. **Create spreadsheet** named `GraphOne Atlas Intelligence`
+2. **Create 6 tabs** with these exact names:
+   - `Startups`
+   - `Products`
+   - `Research Papers`
+   - `Jobs`
+   - `News`
+   - `Entity Mapping Log`
+3. **Auto-upload**: Place GCP service account JSON at `service-account.json` and set `GOOGLE_SERVICE_ACCOUNT_JSON` in `.env`
+4. **Manual fallback**: Import the 6 CSVs from `data/exports/` into corresponding tabs
+
+> If the service account Drive quota is exceeded, the CSVs are always saved locally as a fallback.
+
+---
+
+## Running the Pipeline
 
 ```bash
+# Phase I — Bulk Ingestion
+# Scrapes YC + ArXiv + Product Hunt concurrently
 python scripts/run_bulk.py
-```
 
-Scrapes all primary sources concurrently:
-- **ArXiv**: 1,000 CS.AI papers via OAI-PMH API
-- **Y Combinator**: 5,971 startups via `yc-oss.github.io`
-- **Product Hunt**: 1,044 products via GraphQL API
-
-### Phase II — PapersWithCode
-
-```bash
+# Phase II — PapersWithCode
+# Fetches daily papers from HuggingFace API
 python scripts/run_pwc.py
-```
 
-Fetches 50 daily papers from HuggingFace daily papers API (PapersWithCode source attribution).
-
-### Phase III — Job Boards
-
-```bash
+# Phase III — Job Boards
+# Collects from RemoteOK + Greenhouse + Lever
 python scripts/run_jobs.py
-```
 
-Collects from 4 sources:
-- RemoteOK (101) — public JSON API
-- Greenhouse (3,624) — 25 company boards
-- Lever (127) — Spotify and others
-- Extra Greenhouse boards (canonical, gitlab, mongodb, elastic)
+# Phase IV — Incremental Monitor
+# Freshness-filtered (72h default window)
+python scripts/run_monitor.py
+# Bypass freshness filter to collect everything
+python scripts/run_monitor.py --include-all
 
-### Phase IV — Monitor (Incremental)
-
-```bash
-python scripts/run_monitor.py              # Freshness-filtered (72h window)
-python scripts/run_monitor.py --include-all  # Collect everything
-```
-
-Runs RSS news feeds + all job boards with configurable freshness window.
-
-### Phase V — Export
-
-```bash
+# Phase V — Export
+# Entity resolution + URL validation + CSV/Sheets
 python scripts/run_export.py
 ```
 
-- Resolves entities (compact → normalized → fuzzy matching, threshold 92)
-- Validates source URLs (anti-hallucination regex check)
-- Outputs 6 CSVs to `data/exports/`
-- Attempts Google Sheets auto-upload 
+---
+
+## Expected Runtime
+
+| Step | Duration | Notes |
+|---|---|---|
+| `run_bulk.py` | ~5-8 min | ArXiv rate-limiting (3s delay between batches) |
+| `run_pwc.py` | ~2-5 sec | Single API call |
+| `run_jobs.py` | ~2-3 min | 30+ API calls across 4 boards |
+| `run_monitor.py` | ~30-60 sec | Lightweight feed fetch |
+| `run_export.py` | ~2-5 sec | In-memory pandas operations |
+
+**Total pipeline**: ~10-12 minutes end-to-end.
 
 ---
 
 ## Output Schema
 
-All records follow a uniform structure:
+All records follow a uniform structure with source traceability:
 
-| Column | Example |
+| Column | Type | Example |
+|---|---|---|
+| `schemaVersion` | String | `1.0` |
+| `recordType` | String | `STARTUP` |
+| `source.name` | String | `Y Combinator` |
+| `source.url` | String (validated) | `https://...` |
+| `content.*` | Mixed | Entity-specific fields |
+| `collectedAt` | ISO 8601 | `2026-06-25T12:45:56Z` |
+
+### Startups (`content.data.*`)
+
+| Field | Type | Populated |
+|---|---|---|
+| `entityName` | String | 5,971 / 5,971 |
+| `description` | String | All |
+| `employeeCount` | Integer | Most |
+| `foundedYear` | Integer | Varies |
+| `location` | String | Varies |
+| `website` | String | Most |
+| `fundingTotal` | String | Varies |
+| `batch` | String | 5,970 / 5,971 |
+
+### Products
+
+| Field | Populated |
 |---|---|
-| `schemaVersion` | `1.0` |
-| `recordType` | `STARTUP` / `PRODUCT` / `RESEARCH_PAPER` / `JOB` / `NEWS` |
-| `source.name` | `Y Combinator` / `ArXiv` / `PapersWithCode` / `Greenhouse` |
-| `source.url` | `https://www.ycombinator.com/companies/...` |
-| `content.*` | Entity-specific fields |
-| `collectedAt` | `2026-06-25T12:45:56Z` |
+| `productName` | 1,044 / 1,044 |
+| `startupName` | All |
+| `description` | All |
+| `pricingModel` | Varies |
+| `website` | Most |
+| `category` | Most |
 
-Startups include nested `content.data.*` fields: `employeeCount` (Integer), `description`, `foundedYear`, `location`, `website`, `fundingTotal`, `batch`.
+### Research Papers
+
+| Field | Populated |
+|---|---|
+| `title` | 1,050 / 1,050 |
+| `authors` | All |
+| `paper_url` | All |
+| `github_url` | Varies (enriched) |
+| `github_stars` | Varies |
+
+### Jobs
+
+| Field | Populated |
+|---|---|
+| `company` | 3,477 / 3,477 |
+| `role_title` | All |
+| `is_remote` | Boolean |
+| `location` | Varies |
+| `salary_range` | Varies |
 
 ---
 
-## Key Design Decisions
+## Entity Resolution
 
-| Decision | Rationale |
-|---|---|
-| **SQLite** over PostgreSQL | Zero-infrastructure, single-file, portable; migration path to PG documented |
-| **LLM 3-tier fallback** | Gemini 2.5 Flash (50K tokens) → Groq Llama 3.1 (6K) → DeepSeek V4 Flash (40K) |
-| **Anti-hallucination** | Every record validated against `source_url` regex before export; 0 dropped across all tables |
-| **Entity resolution** | Compact-form exact (score 100) → normalized exact → fuzzy `token_sort_ratio ≥ 92` |
-| **Anti-bot** | Playwright Chromium with stealth UA as 403 fallback in `BaseScraper.fetch()` |
-| **Deduplication** | `UNIQUE(source_url)` on all tables; `INSERT OR IGNORE` semantics |
-| **Freshness** | 72-hour configurable window via `is_within_hours()` in `date_parser.py` |
+Two-pass engine in `src/entity_resolution/resolver.py`:
+
+```
+Input name
+  │
+  ├── Pass 1: Compact exact match (remove spaces/dashes, lowercase)
+  │     Score = 100? ──YES──▶ return canonical name
+  │     No
+  │
+  ├── Pass 2: Normalized exact match (lowercase + strip)
+  │     Score = 100? ──YES──▶ return canonical name
+  │     No
+  │
+  └── Pass 3: Fuzzy match (RapidFuzz token_sort_ratio, threshold 92)
+        Match ≥ 92? ──YES──▶ return canonical name
+        No
+        │
+        ▼
+  Return input unchanged
+```
+
+**Examples:**
+- `"Open AI"` → compact → `"openai"` → exact match `"OpenAI"` (score 100)
+- `"Canvass"` → fuzzy → no match (threshold 92 prevents false positive)
+- `"Deel"` → fuzzy ≠ `"DeepL"` (score below 92, prevented)
+- `"Anthropic PBC"` → normalized strips `" PBC"` → matches `"Anthropic"`
 
 ---
 
-## Database
+## LLM Extraction Chain
 
-Location: `data/structured.db` (SQLite, ~4 MB)
+Three-tier fallback for structured data extraction:
 
-Browse with [DB Browser for SQLite](https://sqlitebrowser.org/) or VS Code SQLite Viewer extension.
+```
+Raw text
+  │
+  ├── Tier 1: Gemini 2.5 Flash (50K tokens)
+  │     Success? ──YES──▶ Done
+  │     No (503/429 retry)
+  │
+  ├── Tier 2: Groq Llama 3.1 8B (6K tokens)
+  │     Success? ──YES──▶ Done
+  │     No
+  │
+  └── Tier 3: DeepSeek V4 Flash (40K tokens)
+        Success? ──YES──▶ Done
+        No
+        │
+        ▼
+  Log warning, skip record
+```
 
-Tables:
-- `startups` (5,971) — YC companies
-- `products` (1,044) — Product Hunt listings
-- `research_papers` (1,050) — ArXiv + PapersWithCode
-- `jobs` (3,477) — RemoteOK + Greenhouse + Lever
-- `news` (37) — RSS feeds
-- `entity_mapping_log` (5,877) — resolution trace
+- Exponential backoff (2s-10s) for 429 (rate limit) and 503 (unavailable)
+- Each tier uses a different model provider to maximize coverage
+- Token limits prevent truncation; content is chunked if needed
+
+---
+
+## Freshness Guarantee (News + Jobs)
+
+```python
+# src/freshness/date_parser.py
+is_within_hours(dt, hours=72)  # Configurable window
+```
+
+- Each news/job record carries a `collectedAt` timestamp
+- Monitor script filters by `is_within_hours()` before insert
+- RSS dates: relative patterns parsed (`"2 hours ago"`, `"yesterday"`)
+- Standard dates: parsed via `dateutil.parser` with UTC normalization
+- `--include-all` bypasses freshness filter for initial backfill
+- `UNIQUE(source_url)` prevents duplicates on re-run
+
+---
+
+## Project Structure
+
+```
+graphone-pipeline/
+├── config/
+│   ├── settings.py
+│   └── __init__.py
+├── scripts/
+│   ├── run_bulk.py              # Phase I: Bulk scrape
+│   ├── run_pwc.py               # Phase II: PapersWithCode
+│   ├── run_jobs.py              # Phase III: Job boards
+│   ├── run_monitor.py           # Phase IV: Incremental
+│   ├── run_export.py            # Phase V: Export
+│   └── generate_pdf.py          # Architecture PDF
+├── src/
+│   ├── scrapers/
+│   │   ├── base_scraper.py      # Async HTTP + Playwright + retry
+│   │   ├── startup_scraper.py   # Y Combinator API
+│   │   ├── product_scraper.py   # Product Hunt GraphQL
+│   │   ├── paper_scraper.py     # ArXiv + HF daily papers
+│   │   ├── job_scraper.py       # RemoteOK + Greenhouse + Lever
+│   │   ├── news_scraper.py      # RSS feedparser + HN API
+│   │   └── github_enricher.py   # GitHub star lookup
+│   ├── storage/
+│   │   └── database.py          # SQLite schema + inserts
+│   ├── freshness/
+│   │   └── date_parser.py       # Date parsing + freshness
+│   ├── llm/
+│   │   ├── orchestrator.py      # 3-tier fallback chain
+│   │   ├── validators.py        # Output validation
+│   │   ├── prompts.py           # Extraction prompts
+│   │   └── chunker.py           # Text chunking
+│   ├── entity_resolution/
+│   │   ├── resolver.py          # Compact→norm→fuzzy pipeline
+│   │   ├── normalizer.py        # Text normalization
+│   │   └── seed_entities.py     # Known entities
+│   └── output/
+│       └── sheets_uploader.py   # Google Sheets upload
+├── data/
+│   ├── structured.db            # SQLite (~4 MB)
+│   ├── exports/                 # 6 CSV files
+│   ├── sheets_ready/
+│   └── GraphOne_Atlas_Intelligence_Architecture.pdf
+├── logs/
+│   └── pipeline.log
+├── .env.example
+├── requirements.txt
+└── README.md
+```
 
 ---
 
 ## Deliverables
 
-| Artifact | Location |
+| Artifact | Path |
 |---|---|
 | Source code | GitHub repository |
 | Architecture document | `data/GraphOne_Atlas_Intelligence_Architecture.pdf` |
 | Exported CSVs | `data/exports/` (6 files) |
-| Database | `data/structured.db` |
+| SQLite database | `data/structured.db` |
 | Pipeline logs | `logs/pipeline.log` |
