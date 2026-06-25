@@ -102,7 +102,7 @@ python scripts/run_export.py
 - Resolves entities (compact → normalized → fuzzy matching, threshold 92)
 - Validates source URLs (anti-hallucination regex check)
 - Outputs 6 CSVs to `data/exports/`
-- Attempts Google Sheets auto-upload (fails if Drive quota exceeded → manual import)
+- Attempts Google Sheets auto-upload 
 
 ---
 
